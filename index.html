@@ -4255,7 +4255,7 @@ canvas.addEventListener('pointerdown', (e) => {
             if (currentLevel <= 1) { startDailyRun(); playJackpotFanfare(); }
             return;
         }
-        if (inBox(pt.x, pt.y, UI_BTN.mColl)) { collectionModalOpen = true; newAccBadge = false; skinsModal.sel = Math.max(0, SKINS.findIndex(k => k.id === equippedSkin)); return; }
+        if (inBox(pt.x, pt.y, UI_BTN.mColl)) { collectionModalOpen = true; newAccBadge = false; skinsModal.sel = Math.max(0, skinList().findIndex(k => k.id === equippedSkin)); return; }
         if (inBox(pt.x, pt.y, UI_BTN.mQuest)) { questsModalOpen = true; return; }
         if (inBox(pt.x, pt.y, UI_BTN.mCity)) { empireModalOpen = true; return; }
         if (inBox(pt.x, pt.y, UI_BTN.mBonus)) { dailyModalOpen = true; return; }
@@ -7747,14 +7747,16 @@ function renderCollectionModal(t, now) {
     ctx.fillStyle = '#94a3b8';
     ctx.font = '700 11.5px ' + UIF;
     ctx.fillText(L('Открывай в сундуках, за достижения или за звёзды', 'Unlock from chests, achievements or for stars'), VW / 2, 132);
-    for (let i = 0; i < SKINS.length; i++) {
-        const k = SKINS[i];
+    const SK = skinList();
+    if (skinsModal.sel >= SK.length) skinsModal.sel = 0;
+    for (let i = 0; i < SK.length; i++) {
+        const k = SK[i];
         const col = i % 5, row = Math.floor(i / 5);
         const bx = 28 + col * 85, by = 148 + row * 140;
         const owned = ownedSkins.includes(k.id), eq = equippedSkin === k.id, sel = skinsModal.sel === i;
         drawRoundedPanel(bx, by, 80, 132, 14, sel ? 'rgba(112, 26, 117, 0.4)' : 'rgba(255, 255, 255, 0.03)', eq ? '#4ade80' : sel ? '#f0abfc' : k.shop ? '#b45309' : '#334155');
         ctx.globalAlpha = owned ? 1 : 0.45;
-        drawPremiumOrb({ x: bx + 40, y: by + 50, radius: 24, tier: [5, 1, 8, 7, 9, 2, 6, 12, 10, 5][i], skin: k.id, scaleX: 1, scaleY: 1, id: i }, false, now);
+        drawPremiumOrb({ x: bx + 40, y: by + 50, radius: 24, tier: [5, 1, 8, 7, 9, 2, 6, 12, 10, 5][SKINS.indexOf(k)], skin: k.id, scaleX: 1, scaleY: 1, id: i }, false, now);
         ctx.globalAlpha = 1;
         if (!owned) drawLineIcon('lock', bx + 66, by + 16, 13, '#94a3b8');
         ctx.fillStyle = owned ? '#f1f5f9' : '#94a3b8';
@@ -7765,7 +7767,7 @@ function renderCollectionModal(t, now) {
         ctx.fillText(eq ? L('НАДЕТО', 'EQUIPPED') : owned ? L('открыт', 'owned') : k.shop ? L('магазин', 'shop') : k.price ? `⭐ ${k.price}` : L('достижение', 'achievement'), bx + 40, by + 118);
     }
     // Выбранный облик
-    const k = SKINS[skinsModal.sel], owned = ownedSkins.includes(k.id), eq = equippedSkin === k.id;
+    const k = skinList()[skinsModal.sel] || SKINS[0], owned = ownedSkins.includes(k.id), eq = equippedSkin === k.id;
     drawRoundedPanel(30, 440, 420, 250, 18, 'rgba(255, 255, 255, 0.03)', '#f0abfc');
     [3, 6, 9].forEach((tr, q) => drawPremiumOrb({ x: 140 + q * 100, y: 500, radius: 30, tier: tr, skin: k.id, scaleX: 1, scaleY: 1, id: q + 1 }, false, now));
     ctx.fillStyle = '#ffffff';
@@ -7809,7 +7811,7 @@ function renderShopModal(t, now) {
     ctx.fillStyle = '#94a3b8';
     ctx.font = '700 11px ' + UIF;
     ctx.fillText(platformName === 'web' ? L('Тестовый режим: покупки имитируются', 'Test mode: purchases are simulated') : L('Покупки поддерживают разработчика и не обязательны для победы', 'Purchases support the developer and are never required to win'), VW / 2, 128);
-    SHOP_ITEMS.forEach((it, i) => {
+    shopList().forEach((it, i) => {
         const r = shopCardRect(i);
         const owned = it.perm && shopOwned[it.id];
         const pr = shopCatalog[it.id];
@@ -7876,19 +7878,21 @@ function renderShopModal(t, now) {
     ctx.fillText(L('Закрыть', 'Close'), VW / 2, 761);
 }
 function shopModalClick(pt) {
-    for (let i = 0; i < SHOP_ITEMS.length; i++) {
-        if (inBox(pt.x, pt.y, shopPriceRect(i)) || inBox(pt.x, pt.y, shopCardRect(i))) { buyShopItem(SHOP_ITEMS[i].id); return; }
+    const list = shopList();
+    for (let i = 0; i < list.length; i++) {
+        if (inBox(pt.x, pt.y, shopPriceRect(i)) || inBox(pt.x, pt.y, shopCardRect(i))) { buyShopItem(list[i].id); return; }
     }
     if (inBox(pt.x, pt.y, { x: 145, y: 734, w: 190, h: 44 }) || pt.y < 70 || pt.y > 790) shopModal.open = false;
 }
 
 function skinsModalClick(pt) {
-    for (let i = 0; i < SKINS.length; i++) {
+    const SK = skinList();
+    for (let i = 0; i < SK.length; i++) {
         const col = i % 5, row = Math.floor(i / 5);
         const bx = 28 + col * 85, by = 148 + row * 140;
         if (pt.x >= bx && pt.x <= bx + 80 && pt.y >= by && pt.y <= by + 132) { skinsModal.sel = i; playPopSound(i + 3, 1); return; }
     }
-    const k = SKINS[skinsModal.sel];
+    const k = SK[skinsModal.sel] || SKINS[0];
     if (inBox(pt.x, pt.y, { x: 60, y: 636, w: 360, h: 44 })) {
         if (ownedSkins.includes(k.id)) {
             if (equippedSkin !== k.id) { setSkin(k.id); skinsModal.flash = 1; playJackpotFanfare(); saveGameState(); }
@@ -9086,7 +9090,12 @@ let shopModal = { open: false, busy: false, msg: '', msgT: 0 };
 const currencyImg = { img: null, ready: false };
 // Имитация покупок — только в тестовой ссылке; на боевых хостингах (если SDK не загрузился) магазин скрыт
 const SHOP_TEST_MODE = (() => { try { return !/yandex|playhop|github\.io|vk\.com|vk-apps|vkplay|ok\.ru|odnoklassniki/i.test(location.hostname); } catch (e) { return false; } })();
-function shopAvailable() { return platformName === 'yandex' ? !!ysdkPayments : (platformName === 'web' && SHOP_TEST_MODE); }
+// В игре показываются только товары, которые активны в Консоли (п. 1.13.6); на ТВ покупок нет (п. 1.6.3.4)
+let shopIsTV = false;
+function shopList() { return platformName === 'yandex' ? SHOP_ITEMS.filter(it => shopCatalog[it.id]) : SHOP_ITEMS; }
+function shopAvailable() { return platformName === 'yandex' ? (!!ysdkPayments && !shopIsTV && shopList().length > 0) : (platformName === 'web' && SHOP_TEST_MODE); }
+// Эксклюзивные облики видны, только если магазин работает (или облик уже куплен)
+function skinList() { return SKINS.filter(k => !k.shop || shopAvailable() || ownedSkins.includes(k.id)); }
 function shopItem(id) { return SHOP_ITEMS.find(x => x.id === id); }
 // Выдать товар. Вызывается и при покупке, и при восстановлении необработанных покупок
 function grantShopItem(id) {
@@ -9139,6 +9148,8 @@ function processPurchase(pur, show) {
 }
 function initPayments() {
     if (!ysdk || !ysdk.getPayments) return;
+    try { shopIsTV = !!(ysdk.deviceInfo && ysdk.deviceInfo.isTV && ysdk.deviceInfo.isTV()); } catch (e) {}
+    if (shopIsTV) return;
     ysdk.getPayments({ signed: false }).then(pay => {
         ysdkPayments = pay;
         pay.getCatalog().then(list => {
@@ -9179,7 +9190,8 @@ let yPlayer = null;
 let platformName = 'web';
 let lastInterstitialTime = performance.now();
 const INTERSTITIAL_COOLDOWN_MS = 180000;
-const LEADERBOARD_NAME = 'score'; // техническое имя лидерборда в консоли Яндекс Игр
+const LEADERBOARD_NAME = 'topscore'; // техническое имя лидерборда в консоли Яндекс Игр
+const LEADERBOARD_DAILY = 'dailyrun'; // лидерборд ежедневного забега
 
 function adUnavailable() {
     addFloatingScore(VW / 2, 420, L('Реклама сейчас недоступна — попробуйте позже', 'Ads are unavailable right now — try later'), '#fca5a5', 15);
@@ -9230,8 +9242,8 @@ function platformSubmitScore() {
 function platformSubmitDaily(depth) {
     try {
         if (platformName !== 'yandex' || !ysdk) return;
-        if (ysdk.leaderboards && ysdk.leaderboards.setScore) ysdk.leaderboards.setScore('daily', depth).catch(() => {});
-        else if (ysdk.getLeaderboards) ysdk.getLeaderboards().then(lb => lb.setLeaderboardScore('daily', depth)).catch(() => {});
+        if (ysdk.leaderboards && ysdk.leaderboards.setScore) ysdk.leaderboards.setScore(LEADERBOARD_DAILY, depth).catch(() => {});
+        else if (ysdk.getLeaderboards) ysdk.getLeaderboards().then(lb => lb.setLeaderboardScore(LEADERBOARD_DAILY, depth)).catch(() => {});
     } catch (e) {}
 }
 
