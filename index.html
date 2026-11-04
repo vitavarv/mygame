@@ -445,7 +445,8 @@ const BALANCE = {
     parSecondsBase: 75,     // время на 3 звезды (1-й уровень)
     giftCooldown: 150,      // секунд до нового подарка за рекламу
     minFightSeconds: 420,   // броня: быстрее этого босса не убить даже идеальной игрой
-    minFightSecondsL1: 230, // первый бой — короче, для знакомства
+    minFightSecondsL1: 95,  // первый бой — быстрая победа для новичка (~1,5–2 мин)
+    minFightSecondsL2: 170, // второй бой — ~3 мин, дальше полные 5–8 мин
     armorBurstSeconds: 45,  // запас брони: сколько «секунд урона» проходит одним мощным выстрелом
     armorLeak: 0.08,        // какая доля урона сверх брони всё же проходит
     // 🎯 ВЫСТРЕЛ СФЕРОЙ
@@ -453,7 +454,8 @@ const BALANCE = {
     shotK: 26,              // урон выстрела = shotK × число на сфере × shotBonus^(ступень−5)
     shotBonus: 1.12,        // крупные сферы выгоднее: каждая ступень +12% сверх удвоения
     shotCooldown: 0.5,      // минимальная пауза между выстрелами, сек
-    l1HpMult: 0.42,
+    l1HpMult: 0.2,
+    l2HpMult: 0.6,
     // ⚡ ЭНЕРГИЯ ВЫСТРЕЛОВ: стрелять можно любой сферой, но выстрел стоит 1 заряд
     energyMax: 5,           // сколько зарядов вмещает шкала
     energyStart: 2,         // зарядов в начале уровня
@@ -1903,6 +1905,7 @@ function initRivalForLevel(lvl) {
     }
     if (rival.type === 'mega' && !rival.isFinal) rival.maxHp = Math.floor(rival.maxHp * 1.6 / 100) * 100;
     if (lvl === 1) rival.maxHp = Math.floor(rival.maxHp * BALANCE.l1HpMult / 100) * 100; // первый бой — короче, для знакомства
+    if (lvl === 2) rival.maxHp = Math.floor(rival.maxHp * BALANCE.l2HpMult / 100) * 100;
     rival.hp = rival.maxHp;
     rival.layers = lvl === 1 ? 3 : Math.min(8, 3 + Math.floor(lvl / 2)) + (rival.type === 'mega' ? 1 : 0);
     rival.dropsLeft = rival.type === 'drops' ? 560 : 0;   // броня держит бой ~5 мин, 420 бросков — это темп ~1 бросок в 0.75 с
@@ -2137,6 +2140,13 @@ let secondUsed = false;
 let perkTurretT = 3;
 let mergeCount = 0;
 let pendingEnding = false;
+let runStartLevel = 1;      // с какого уровня начат текущий забег
+let pendingPerkPicks = 0;   // усиления «за пропущенные уровни» при старте с контрольной точки
+let startPick = { open: false };
+const CHECKPOINTS = [4, 7];
+function checkpointLevel() { let c = 1; CHECKPOINTS.forEach(l => { if (bestDepth >= l) c = l; }); return c; }
+function availableStarts() { return [1].concat(CHECKPOINTS.filter(l => bestDepth >= l)); }
+function isFreshRun() { return currentLevel === 1 && runStartLevel === 1 && runDrops === 0 && !dailyMode; }
 
 function perkLvl(id) { return runPerks[id] || 0; }
 // Урон в процентах от HP босса не усиливается бонусом империи (иначе поздние уровни становятся слишком лёгкими)
@@ -2173,6 +2183,7 @@ function pickPerk(id) {
     runPerks[id] = perkLvl(id) + 1;
     checkNewSynergies(synBefore);
     perkModal.open = false;
+    if (pendingPerkPicks > 0) { pendingPerkPicks--; openPerkChoice(); }
     playVictoryFanfare();
     burstRays.push({ x: VW / 2, y: 400, life: 1.0, color: ['#94a3b8', '#38bdf8', '#e879f9'][perkDef(id).rar] });
     if (id === 'gift') giftTimer = Math.min(giftTimer, getGiftCooldown());
@@ -2201,10 +2212,11 @@ function finishRun() {
     questEvent('depth', depth);
     let dailyBestNow = false;
     if (dailyMode) { ensureDaily(); if (depth > daily.best) { daily.best = depth; dailyBestNow = true; } platformSubmitDaily(daily.best); }
-    const reward = Math.round(depth * 25 * (1 + perkLvl('greed') * 0.5));
+    const progressed = Math.max(1, depth - (runStartLevel || 1) + 1);
+    const reward = Math.round(progressed * 25 * (1 + perkLvl('greed') * 0.5));
     stars += reward;
     let chest = -1;
-    if (depth >= 8) chest = 2; else if (depth >= 4) chest = 1; else if (depth >= 2) chest = 0;
+    if (progressed >= 2) { if (depth >= 8) chest = 2; else if (depth >= 4) chest = 1; else chest = 0; }
     if (chest >= 0) awardChest(chest);
     runEndModal = { open: true, depth, reward, chest: lastChestEarned >= 0 ? chest : -1, newRecord, perks: Object.assign({}, runPerks), unlocked, wasDaily: dailyMode, dailyBestNow, syn: activeSynIds() };
     isGameOver = false;
@@ -2213,20 +2225,26 @@ function finishRun() {
     platformCloudSave();
 }
 
-function startNewRun(isDaily = false) {
+function startNewRun(isDaily = false, startLvl = 1, deferPicks = false) {
     runEndModal.open = false;
+    startPick.open = false;
+    if (isDaily) startLvl = 1;
     if (!isDaily) { dailyMode = false; dailyRng = null; }
     runPerks = {};
     secondUsed = false;
     runDrops = 0;
-    currentLevel = 1;
+    currentLevel = startLvl;
+    runStartLevel = startLvl;
     shuffleRunOrder();
     orbs = [];
     combo = 0; dangerTimer = 0; feverMeter = 0; feverActiveTimer = 0;
     isGameOver = false; canDrop = true; dropCooldown = 0;
     lastChestEarned = -1;
-    initRivalForLevel(1);
+    initRivalForLevel(startLvl);
     levelIntroT = 2.6;
+    // Старт с контрольной точки: сразу выбираем усиления за пропущенные уровни
+    pendingPerkPicks = startLvl > 1 ? startLvl - 1 : 0;
+    if (pendingPerkPicks > 0 && !deferPicks) { pendingPerkPicks--; openPerkChoice(); }
     saveGameState();
     platformGameplayStart();
     tryShowInterstitialAdWithCooldown();
@@ -2264,7 +2282,7 @@ function renderPerkModal(t, now) {
     drawFancyTitle(t.perkTitle, VW / 2, 200, 24, '#ffffff', '#c4b5fd', '#8b5cf6');
     ctx.fillStyle = '#cbd5e1';
     ctx.font = '700 13px ' + UIF;
-    ctx.fillText(`${t.lvlShort} ${currentLevel} · ${t.perkSub}`, VW / 2, 224);
+    ctx.fillText(pendingPerkPicks > 0 ? L(`Контрольная точка · ещё ${pendingPerkPicks} на выбор`, `Checkpoint · ${pendingPerkPicks} more to pick`) : `${t.lvlShort} ${currentLevel} · ${t.perkSub}`, VW / 2, 224);
     perkModal.choices.forEach((id, i) => {
         const p = perkDef(id);
         const lvl = perkLvl(id);
@@ -2335,6 +2353,57 @@ function wrapText(txt, x, y, maxW, lh) {
     if (line) ctx.fillText(line, x, y);
 }
 
+function startPickRect(i) { return { x: 60, y: 270 + i * 92, w: 360, h: 78 }; }
+function renderStartPickModal(t, now) {
+    ctx.fillStyle = 'rgba(3, 4, 10, 0.88)';
+    ctx.fillRect(0, 0, VW, VH);
+    const opts = availableStarts();
+    const ph = 182 + opts.length * 92;
+    const py = 160;
+    drawRoundedPanel(32, py, 416, ph, 26, 'rgba(10, 13, 24, 0.97)', '#34d399');
+    ctx.textAlign = 'center';
+    drawFancyTitle(L('С КАКОГО УРОВНЯ?', 'START FROM?'), VW / 2, py + 50, 22, '#ffffff', '#6ee7b7', '#10b981');
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '700 11.5px ' + UIF;
+    ctx.fillText(L('Прокачка камней и облики сохраняются в любом случае', 'Gem upgrades and skins are kept either way'), VW / 2, py + 80);
+    opts.forEach((lv, i) => {
+        const r = startPickRect(i);
+        const main = lv === opts[opts.length - 1];
+        if (main) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.22 + Math.sin(now * 0.004) * 0.06; ctx.drawImage(getGlowSprite('#10b981'), r.x - 30, r.y - 24, r.w + 60, r.h + 48); ctx.restore(); }
+        drawRoundedPanel(r.x, r.y, r.w, r.h, 18, main ? 'rgba(6, 78, 59, 0.75)' : 'rgba(255, 255, 255, 0.04)', main ? '#34d399' : '#334155');
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 19px ' + UIF;
+        ctx.fillText(L(`Уровень ${lv}`, `Level ${lv}`), r.x + 22, r.y + 34);
+        ctx.fillStyle = main ? '#a7f3d0' : '#94a3b8';
+        ctx.font = '700 11.5px ' + UIF;
+        ctx.fillText(lv === 1 ? L('Полный забег с самого начала', 'Full run from the very start')
+                              : L(`Контрольная точка · ${lv - 1} усилений на выбор сразу`, `Checkpoint · pick ${lv - 1} power-ups right away`), r.x + 22, r.y + 56);
+        ctx.textAlign = 'center';
+        drawLineIcon(lv === 1 ? 'repeat' : 'flag', r.x + r.w - 36, r.y + r.h / 2, 24, main ? '#6ee7b7' : '#94a3b8');
+    });
+    const cy = py + ph - 62;
+    drawRoundedPanel(145, cy, 190, 44, 14, 'rgba(12, 16, 28, 0.9)', '#64748b');
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 13px ' + UIF;
+    ctx.fillText(L('Закрыть', 'Close'), VW / 2, cy + 27);
+}
+function startPickClick(pt) {
+    const opts = availableStarts();
+    for (let i = 0; i < opts.length; i++) {
+        if (inBox(pt.x, pt.y, startPickRect(i))) {
+            startPick.open = false;
+            inStartMenu = false;
+            startNewRun(false, opts[i]);
+            playJackpotFanfare();
+            platformGameplayStart();
+            return;
+        }
+    }
+    const ph = 182 + opts.length * 92, cy = 160 + ph - 62;
+    if (inBox(pt.x, pt.y, { x: 145, y: cy, w: 190, h: 44 }) || pt.y < 160 || pt.y > 160 + ph) startPick.open = false;
+}
+
 function renderRunEndModal(t, now) {
     const re = runEndModal;
     ctx.fillStyle = 'rgba(6, 5, 18, 0.95)';
@@ -2381,14 +2450,31 @@ function renderRunEndModal(t, now) {
         ctx.fillText(t.chestNames[re.chest], VW / 2 - 60, 476);
         ctx.textAlign = 'center';
     }
-    drawRoundedPanel(70, 530, 340, 60, 16, '#10b981', '#ffffff');
-    ctx.fillStyle = '#052e16';
-    ctx.font = '900 18px ' + UIF;
-    ctx.fillText(t.newRun, VW / 2, 567);
-    drawRoundedPanel(140, 604, 200, 44, 12, '#1e293b', '#475569');
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '800 14px ' + UIF;
-    ctx.fillText(t.topMenuBtn, VW / 2, 632);
+    const cp = re.wasDaily ? 1 : checkpointLevel();
+    if (cp > 1) {
+        // Контрольная точка: можно не начинать с самого начала
+        drawRoundedPanel(70, 526, 340, 58, 16, '#10b981', '#ffffff');
+        ctx.fillStyle = '#052e16';
+        ctx.font = '900 17px ' + UIF;
+        ctx.fillText(L(`▶ ПРОДОЛЖИТЬ С УРОВНЯ ${cp}`, `▶ CONTINUE FROM LEVEL ${cp}`), VW / 2, 554);
+        ctx.font = '700 10.5px ' + UIF;
+        ctx.fillText(L(`контрольная точка · ${cp - 1} усилений на выбор сразу`, `checkpoint · pick ${cp - 1} power-ups right away`), VW / 2, 572);
+        drawRoundedPanel(70, 596, 164, 46, 12, '#1e293b', '#475569');
+        drawRoundedPanel(246, 596, 164, 46, 12, '#1e293b', '#475569');
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '800 13px ' + UIF;
+        ctx.fillText(L('С 1-го уровня', 'From level 1'), 152, 624);
+        ctx.fillText(t.topMenuBtn, 328, 624);
+    } else {
+        drawRoundedPanel(70, 530, 340, 60, 16, '#10b981', '#ffffff');
+        ctx.fillStyle = '#052e16';
+        ctx.font = '900 18px ' + UIF;
+        ctx.fillText(t.newRun, VW / 2, 567);
+        drawRoundedPanel(140, 604, 200, 44, 12, '#1e293b', '#475569');
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '800 14px ' + UIF;
+        ctx.fillText(t.topMenuBtn, VW / 2, 632);
+    }
 }
 
 // ============================================================================
@@ -2838,7 +2924,7 @@ function triggerRivalTrick() {
     if (roll < 0.3 && !rival.shieldActive && rival.hp < rival.maxHp * 0.88) {
         rival.shieldActive = true;
         playIceCrackSound();
-        addFloatingScore(VW / 2, 198, t.shieldActiveText, '#38bdf8', 13.5);
+        addFloatingScore(VW / 2, 198, bossHint('shield', t.shieldActiveText, L('ЩИТ БОССА!', 'BOSS SHIELD!')), '#38bdf8', 13.5);
         return;
     }
 
@@ -2853,7 +2939,7 @@ function triggerRivalTrick() {
         rival.beamX = sx;
         rival.beamY = JAR.y + 40;
         playIceCrackSound();
-        addFloatingScore(VW / 2, 198, t.rivalStoneMsg, '#f97316', 14);
+        addFloatingScore(VW / 2, 198, bossHint('stone', t.rivalStoneMsg, L('КАМЕНЬ!', 'STONE!')), '#f97316', 14);
         return;
     }
 
@@ -2870,7 +2956,7 @@ function triggerRivalTrick() {
 
         playIceCrackSound();
         spawnParticles(target.x, target.y, '#38bdf8', 14);
-        addFloatingScore(VW / 2, 198, t.rivalFrozeMsg, '#38bdf8', 13.5);
+        addFloatingScore(VW / 2, 198, bossHint('froze', t.rivalFrozeMsg, L('ЗАМОРОЗКА!', 'FROZEN!')), '#38bdf8', 13.5);
     }
 }
 
@@ -2885,13 +2971,13 @@ function shatterNearbyHazards(mx, my, blastRadius, breakStones = false) {
                 if (perkLvl('ice')) fireRivalMissile(o.x, o.y, 80 * perkDef('ice').n(perkLvl('ice')), '#bae6fd');
                 playIceCrackSound();
                 spawnParticles(o.x, o.y, '#38bdf8', 14);
-                addFloatingScore(o.x, o.y - 20, t.iceBrokenMsg, '#38bdf8', 15);
+                addFloatingScore(o.x, o.y - 20, t.iceBrokenMsg, '#38bdf8', 15, true);
             }
             if (o.isStone && breakStones) {
                 playIceCrackSound();
                 spawnParticles(o.x, o.y, '#fbbf24', 18);
                 fireRivalMissile(o.x, o.y, 120 * (perkLvl('ice') ? perkDef('ice').n(perkLvl('ice')) : 1), '#fbbf24');
-                addFloatingScore(o.x, o.y - 20, t.stoneBrokenMsg, '#fbbf24', 15);
+                addFloatingScore(o.x, o.y - 20, t.stoneBrokenMsg, '#fbbf24', 15, true);
                 orbs.splice(i, 1);
             }
         }
@@ -3360,7 +3446,7 @@ function bossLayerIdx() {
     const n = rival.layers || 1;
     return Math.max(0, Math.ceil(rival.hp / (rival.maxHp / n) - 1e-9));
 }
-function armorFightSec() { return currentLevel === 1 ? BALANCE.minFightSecondsL1 : BALANCE.minFightSeconds; }
+function armorFightSec() { return currentLevel === 1 ? BALANCE.minFightSecondsL1 : currentLevel === 2 ? BALANCE.minFightSecondsL2 : BALANCE.minFightSeconds; }
 function damageRival(dmg, quiet = false, pierce = false) {
     if (stageWinModalOpen || isGameOver || koTimer > 0) return;
     const layerBefore = bossLayerIdx();
@@ -3458,13 +3544,14 @@ function damageRival(dmg, quiet = false, pierce = false) {
         // НОКАУТ: замедление, взрыв босса, затем окно победы со звёздами
         koTimer = 1.4;
         hitStopTimer = 0.6;
+        if (pendingLeagueRank) { addFloatingScore(VW / 2, 165, `${I18N[currentLang].overtakenMsg}${pendingLeagueRank}!`, '#4ade80', 17); pendingLeagueRank = 0; }
         vibrateDevice(90);
         playVictoryFanfare();
         spawnConfettiShower();
         fireFourCornerCannons();
         for (let k = 0; k < 4; k++) spawnParticles(45 + (Math.random() - 0.5) * 40, 85, ['#fde047', '#f43f5e', '#38bdf8', '#ffffff'][k], 16);
         burstRays.push({ x: 45, y: 85, life: 1.4, color: '#fde047' });
-        const par = BALANCE.parSecondsBase + (currentLevel - 1) * 8;
+        const par = armorFightSec() * 1.15 + 10;
         victoryStars = 1 + (levelTimer <= par * 1.6 ? 1 : 0) + (levelTimer <= par && revivesThisLevel === 0 && peakDanger < 0.6 ? 1 : 0);
         victoryAnimT = 0;
         const prev = bestStarsByLevel[currentLevel] || 0;
@@ -3523,6 +3610,13 @@ function advanceToNextLevel(bonusCharges = 0) {
     tryShowInterstitialAdWithCooldown();
 }
 
+let pendingLeagueRank = 0;
+// Длинная подсказка про атаку босса — первые 3 раза, дальше коротко
+let hintSeen = {};
+function bossHint(key, longTxt, shortTxt) {
+    hintSeen[key] = (hintSeen[key] || 0) + 1;
+    return hintSeen[key] <= 3 ? longTxt : shortTxt;
+}
 function addScoreAndCheckLeague(pts) {
     score += Math.ceil(pts);
     const t = I18N[currentLang];
@@ -3530,8 +3624,7 @@ function addScoreAndCheckLeague(pts) {
         leagueIdx++;
         const newRank = TOP_100_RIVALS[leagueIdx].rank;
         stars += 5;
-        playJackpotFanfare();
-        addFloatingScore(VW / 2, 165, `${t.overtakenMsg}${newRank}!`, '#4ade80', 17);
+        pendingLeagueRank = newRank;
     }
 }
 
@@ -3917,7 +4010,12 @@ function spawnConfettiShower() {
     }
 }
 
-function addFloatingScore(x, y, txt, color = '#ffffff', size = 16.5) {
+function addFloatingScore(x, y, txt, color = '#ffffff', size = 16.5, minor = false) {
+    // Меньше шума в бою: одинаковые надписи не дублируем, второстепенные — только когда экран свободен
+    const live = floatingLabels.filter(fl => fl.life > 0.35);
+    if (live.some(fl => fl.txt === txt)) return;
+    if (minor && live.length >= 2) return;
+    if (live.length >= 5) { const old = floatingLabels.find(fl => fl.life > 0.35); if (old) old.life = Math.min(old.life, 0.3); }
     if (floatingLabels.length > 18) floatingLabels.shift();
     // Не даём надписям налезать друг на друга: сдвигаем новую ниже
     for (let k = 0; k < 4; k++) {
@@ -3941,7 +4039,7 @@ function saveGameState() {
             lang: currentLang,
             tutorialDone, shotTutDone, gemLv, gemSh, bestStarsByLevel, musicEnabled, soundEnabled,
             chestSlots, ownedSkins, equippedSkin, shopOwned,
-            runPerks, runOrder, bestDepth, runDrops, secondUsed, facesOn,
+            runPerks, runOrder, bestDepth, runDrops, secondUsed, facesOn, runStartLevel, pendingPerkPicks: pendingPerkPicks + (perkModal.open ? 1 : 0), hintSeen,
             quests, daily, dailyMode, discoveredSyn, clubLevels, finalWins, mergeCount,
             savedAt: Date.now(),
             orbs: orbs.map(o => {
@@ -3982,6 +4080,9 @@ function loadGameState(rawOverride) {
         if (data.runPerks) runPerks = data.runPerks;
         if (Array.isArray(data.runOrder) && data.runOrder.length === WORLD_COUNT) runOrder = data.runOrder;
         bestDepth = data.bestDepth || 0;
+        runStartLevel = data.runStartLevel || 1;
+        hintSeen = data.hintSeen || {};
+        pendingPerkPicks = data.pendingPerkPicks || 0;
         runDrops = data.runDrops || 0;
         secondUsed = !!data.secondUsed;
         if (data.quests && Array.isArray(data.quests.list)) quests = data.quests;
@@ -4157,6 +4258,7 @@ canvas.addEventListener('pointerdown', (e) => {
     if (questsModalOpen) { questsModalClick(pt); return; }
     if (gemsModal.open) { gemsModalClick(pt); return; }
     if (shopModal.open) { if (!shopModal.busy) shopModalClick(pt); return; }
+    if (startPick.open) { startPickClick(pt); return; }
 
     // Выбор усиления
     if (perkModal.open) {
@@ -4170,8 +4272,15 @@ canvas.addEventListener('pointerdown', (e) => {
     }
     // Итоги забега
     if (runEndModal.open) {
-        if (pt.x >= 70 && pt.x <= 410 && pt.y >= 530 && pt.y <= 590) startNewRun();
-        else if (pt.x >= 140 && pt.x <= 340 && pt.y >= 604 && pt.y <= 648) { startNewRun(); inStartMenu = true; platformGameplayStop(); }
+        const cp = runEndModal.wasDaily ? 1 : checkpointLevel();
+        if (cp > 1) {
+            if (pt.x >= 70 && pt.x <= 410 && pt.y >= 526 && pt.y <= 584) startNewRun(false, cp);
+            else if (pt.x >= 70 && pt.x <= 234 && pt.y >= 596 && pt.y <= 642) startNewRun(false, 1);
+            else if (pt.x >= 246 && pt.x <= 410 && pt.y >= 596 && pt.y <= 642) { startNewRun(); inStartMenu = true; platformGameplayStop(); }
+        } else {
+            if (pt.x >= 70 && pt.x <= 410 && pt.y >= 530 && pt.y <= 590) startNewRun();
+            else if (pt.x >= 140 && pt.x <= 340 && pt.y >= 604 && pt.y <= 648) { startNewRun(); inStartMenu = true; platformGameplayStop(); }
+        }
         return;
     }
 
@@ -4245,8 +4354,10 @@ canvas.addEventListener('pointerdown', (e) => {
     // 5. ЕСЛИ ОТКРЫТО ГЛАВНОЕ МЕНЮ ЗАПУСКА!
     if (inStartMenu) {
         if (inBox(pt.x, pt.y, UI_BTN.mPlay)) {
+            if (!dailyMode && isFreshRun() && checkpointLevel() > 1) { startPick.open = true; return; }
             inStartMenu = false;
             if (dailyMode && currentLevel <= 1) startNewRun(false);
+            if (pendingPerkPicks > 0 && !perkModal.open) { pendingPerkPicks--; openPerkChoice(); }
             playJackpotFanfare();
             platformGameplayStart();
             return;
@@ -4425,7 +4536,7 @@ canvas.addEventListener('pointerdown', (e) => {
             spawnParticles(o.x, o.y, '#38bdf8', 10);
             if (o.frozen <= 0) {
                 stars += 5;
-                addFloatingScore(o.x, o.y - 20, t.iceBrokenMsg, '#38bdf8', 15);
+                addFloatingScore(o.x, o.y - 20, t.iceBrokenMsg, '#38bdf8', 15, true);
             }
             return;
         }
@@ -4566,17 +4677,17 @@ function stepPhysics(dt, now) {
                         if (wMode === 1) {
                             // Вегас: Золотая фишка дает +1 звезду!
                             spawnSubtleStarburst(bmp.x, bmp.y, 1);
-                            addFloatingScore(bmp.x + bmp.side * 46, bmp.y, t.gizmoVegasMsg, '#fde047', 13.5);
+                            addFloatingScore(bmp.x + bmp.side * 46, bmp.y, t.gizmoVegasMsg, '#fde047', 13.5, true);
                         } else if (wMode === 3 && o.frozen > 0) {
                             // Атлантида: Снимает лед при ударе о раковину!
                             o.frozen = 0;
-                            addFloatingScore(bmp.x + bmp.side * 46, bmp.y, t.iceBrokenMsg, '#2dd4bf', 13.5);
+                            addFloatingScore(bmp.x + bmp.side * 46, bmp.y, t.iceBrokenMsg, '#2dd4bf', 13.5, true);
                         } else if (wMode === 4) {
                             // Токио: Нитро-дрифт ускорение!
                             o.vx = bmp.side * 440;
-                            addFloatingScore(bmp.x + bmp.side * 46, bmp.y, t.nitroMsg, '#f43f5e', 13.5);
+                            addFloatingScore(bmp.x + bmp.side * 46, bmp.y, t.nitroMsg, '#f43f5e', 13.5, true);
                         } else {
-                            addFloatingScore(bmp.x + bmp.side * 42, bmp.y, t.bumperHitMsg, '#38bdf8', 13.5);
+                            addFloatingScore(bmp.x + bmp.side * 42, bmp.y, t.bumperHitMsg, '#38bdf8', 13.5, true);
                         }
                     }
                 });
@@ -4837,7 +4948,7 @@ function handleOrbMerge(mx, my, newTier, hadChest = false) {
     // В Неоновом Токио (Мир 5) комбо x3+ вызывает Удар Катаны по преградам!
     if ((themeIdx % WORLD_COUNT) === 4 && combo >= 3) {
         shatterNearbyHazards(VW / 2, JAR.y + JAR.h / 2, 260);
-        addFloatingScore(mx, my - 34, t.gizmoKatanaMsg, '#f43f5e', 14.5);
+        addFloatingScore(mx, my - 34, t.gizmoKatanaMsg, '#f43f5e', 14.5, true);
     }
 
     // Шанс КРИТИЧЕСКОГО СЛИЯНИЯ Х3 при комбо!
@@ -6632,6 +6743,7 @@ function renderScene(dt, now) {
         if (questsModalOpen) renderQuestsModal(t, now);
         if (gemsModal.open) renderGemsModal(t, now);
         if (shopModal.open) renderShopModal(t, now);
+        if (startPick.open) renderStartPickModal(t, now);
         if (chestModal.open) renderChestModal(t, now);
         if (adConfirm.open) renderAdConfirmModal(t, now);
         confetti.forEach(c => {
@@ -8772,6 +8884,10 @@ function drawLineIcon(name, cx, cy, s, col) {
         case 'scroll':
             ctx.roundRect(-7, -8, 14, 16, 2); ctx.moveTo(-4, -3); ctx.lineTo(4, -3); ctx.moveTo(-4, 1); ctx.lineTo(4, 1); ctx.moveTo(-4, 5); ctx.lineTo(1, 5);
             break;
+        case 'flag':
+            ctx.moveTo(-6, 10); ctx.lineTo(-6, -9);
+            ctx.moveTo(-6, -8); ctx.quadraticCurveTo(-1, -11, 2, -8); ctx.quadraticCurveTo(5, -5, 9, -7); ctx.lineTo(9, 1); ctx.quadraticCurveTo(5, 3, 2, 0); ctx.quadraticCurveTo(-1, -3, -6, 0);
+            break;
         case 'repeat':
             ctx.arc(0, 0, 7, -Math.PI * 0.85, Math.PI * 0.35); ctx.moveTo(-7, 0); ctx.arc(0, 0, 7, Math.PI, Math.PI * 1.15);
             ctx.moveTo(6.5, 6); ctx.lineTo(4, 3); ctx.moveTo(6.5, 6); ctx.lineTo(8.5, 2.5);
@@ -9394,6 +9510,9 @@ function watchRewardedAd(type) {
                     .then(data => { resumeAfterAd(); if (data && data.result) { lastInterstitialTime = performance.now(); applyBoosterEffect(type); } else adUnavailable(); });
             })
             .catch(() => { resumeAfterAd(); adUnavailable(); });
+    } else if (!SHOP_TEST_MODE) {
+        // Боевой хостинг, но SDK площадки не загрузился — рекламу не имитируем (п. 1.16)
+        adUnavailable();
     } else {
         // Без площадки (тест в браузере): имитация рекламы на 3 секунды
         pauseForAd();
